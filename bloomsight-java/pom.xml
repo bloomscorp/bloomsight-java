@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<parent>
+		<groupId>com.bloomscorp</groupId>
+		<artifactId>bloomsight-parent</artifactId>
+		<version>0.1.0</version>
+	</parent>
+
+	<artifactId>bloomsight-java</artifactId>
+	<name>Bloomsight for Java</name>
+	<description>Send Bloomsight email templates from your Java backend: idempotent, retried, typed. Java 11+, no dependencies.</description>
+
+	<properties>
+		<!-- Java 11 bytecode and API, whatever JDK builds it. -->
+		<maven.compiler.release>11</maven.compiler.release>
+	</properties>
+
+	<!-- No runtime dependencies, on purpose: scripts/verify-package.sh fails the build if one appears. -->
+	<dependencies>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<resources>
+			<!-- bloomsight-java.properties carries the version for the User-Agent. -->
+			<resource>
+				<directory>src/main/resources</directory>
+				<filtering>true</filtering>
+			</resource>
+		</resources>
+		<plugins>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-jar-plugin</artifactId>
+				<configuration>
+					<archive>
+						<manifestEntries>
+							<Automatic-Module-Name>com.bloomscorp.bloomsight</Automatic-Module-Name>
+						</manifestEntries>
+					</archive>
+				</configuration>
+			</plugin>
+		</plugins>
+	</build>
+</project>

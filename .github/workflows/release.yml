@@ -1,0 +1,77 @@
+name: Release
+
+# Triggered by a version tag (v0.1.0). Runs every check, then signs and publishes all
+# three artifacts to Maven Central. A version published to Central can never be
+# changed or deleted, so nothing here runs before the checks pass.
+#
+# Repository secrets (added by the owner in GitHub → Settings → Secrets → Actions;
+# never in code or chat):
+#   CENTRAL_TOKEN_USERNAME, CENTRAL_TOKEN_PASSWORD   a Central Portal user token
+#   GPG_PRIVATE_KEY, GPG_PASSPHRASE                  the release signing key
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            11
+            21
+          cache: maven
+          # Writes ~/.m2/settings.xml with a "central" server whose credentials come
+          # from the environment variables named here, and imports the signing key.
+          server-id: central
+          server-username: CENTRAL_TOKEN_USERNAME
+          server-password: CENTRAL_TOKEN_PASSWORD
+          # The passphrase is read from MAVEN_GPG_PASSPHRASE at signing time (see the
+          # publish step), not written into settings.xml.
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+
+      - name: Check the tag matches the version being published
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VERSION="$(mvn -B -q help:evaluate -Dexpression=project.version -DforceStdout)"
+          if [ "$TAG" != "$VERSION" ]; then echo "::error::tag v$TAG does not match the POM version $VERSION"; exit 1; fi
+
+      - name: Test (Spring Boot 3.5)
+        run: mvn -B verify
+
+      - name: Test the starter on Spring Boot 4
+        run: |
+          mvn -B -pl bloomsight-spring-boot-starter -am verify -Dspring-boot.version=4.0.9
+          mvn -B -pl bloomsight-spring-boot-starter -am verify -Dspring-boot.version=4.1.2
+
+      - name: Check what would be published
+        run: scripts/verify-package.sh
+        env:
+          JAVA11_HOME: ${{ env.JAVA_HOME_11_X64 }}
+
+      - name: Sign and publish to Maven Central
+        run: mvn -B -Prelease -DskipTests deploy
+        env:
+          CENTRAL_TOKEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
+          CENTRAL_TOKEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "Published to Maven Central:
+          - \`com.bloomscorp:bloomsight-java:$V\`
+          - \`com.bloomscorp:bloomsight-spring-boot-starter:$V\`"
