@@ -14,6 +14,7 @@ in your project's Bloomsight dashboard.
   never appears in an error.
 - **No dependencies.** Java 11+, built on `java.net.http`, so it never clashes with your
   own Jackson, OkHttp or Apache client.
+- **Attachments**: PDFs, spreadsheets, images, up to 5 files per email.
 - **Spring Boot starter** for Boot 3 and 4: set one property and inject the client.
 
 For browser forms, use [`@bloomscorp/bloomsight.js`](https://www.npmjs.com/package/@bloomscorp/bloomsight.js);
@@ -27,12 +28,12 @@ Plain Java (Java 11+):
 <dependency>
   <groupId>com.bloomscorp</groupId>
   <artifactId>bloomsight-java</artifactId>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
 </dependency>
 ```
 
 ```kotlin
-implementation("com.bloomscorp:bloomsight-java:0.1.0")
+implementation("com.bloomscorp:bloomsight-java:0.2.0")
 ```
 
 Spring Boot 3 or 4 (Java 17+): use the starter instead; it includes the client.
@@ -41,12 +42,12 @@ Spring Boot 3 or 4 (Java 17+): use the starter instead; it includes the client.
 <dependency>
   <groupId>com.bloomscorp</groupId>
   <artifactId>bloomsight-spring-boot-starter</artifactId>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
 </dependency>
 ```
 
 ```kotlin
-implementation("com.bloomscorp:bloomsight-spring-boot-starter:0.1.0")
+implementation("com.bloomscorp:bloomsight-spring-boot-starter:0.2.0")
 ```
 
 ## Set up
@@ -100,6 +101,70 @@ refused with `INVALID_DATA` before anything is sent; turn it into text first.
 Calls block until blooms.ai answers, through any retries. Call them from a background
 thread or a virtual thread if you don't want a request to wait.
 
+## Attachments
+
+```java
+import com.bloomscorp.bloomsight.Attachment;
+
+byte[] pdf = invoices.renderPdf(order);    // your own PDF, in memory
+
+Send send = bloomsight.sendMail(SendMailRequest.builder()
+    .templateId("…")
+    .engineId("…")
+    .value("name", "Asha")
+    .value("email", "asha@example.com")
+    .attachment(Attachment.of("invoice-A-1042.pdf", pdf))         // type from the name
+    .attachment(Attachment.fromPath(Path.of("/srv/terms.pdf")))    // read now
+    .idempotencyKey("order-A-1042-invoice")
+    .build());
+
+send.getStatus();   // SENT: the provider accepted it
+                    // FAILED: refused outright, e.g. a bad address (send.getError())
+                    // UNKNOWN: the connection dropped mid-send; it may or may not have arrived
+```
+
+A send with attachments is **not queued**: the files are kept in memory only and never
+stored, so the email is sent while the call waits, and it comes back finished:
+`SENT`, `FAILED` or `UNKNOWN`, returned rather than thrown. A retry of the same
+`idempotencyKey` that arrives while the first is still sending gets `SENDING`.
+`send.getAttachmentCount()` says how many files went.
+
+When the mailbox has no budget or blooms.ai is busy, **nothing is sent** and the client
+retries for you with the same idempotency key, honouring `Retry-After`; a longer wait
+(a mailbox at its daily limit) is thrown with `getRetryAfter()`, as for any send.
+
+| Rule | Code |
+|---|---|
+| 1 to 5 files | `TOO_MANY_ATTACHMENTS` |
+| each file 1 byte to 5 MB | `ATTACHMENT_TOO_LARGE`; an empty file is `INVALID_ATTACHMENT` |
+| 15 MB for all files together | `ATTACHMENTS_TOO_LARGE` |
+| a file name of 1 to 150 characters, after cleaning | `INVALID_ATTACHMENT` |
+| not a type mail providers refuse to deliver | `ATTACHMENT_TYPE_BLOCKED` |
+
+- Every rule is checked **before anything is uploaded** (blooms.ai checks them again), so
+  a bad file fails at once with `BloomsightException` from `sendMail`. A megabyte here
+  is 1,048,576 bytes.
+- **Blocked types**, by the last extension (`invoice.pdf.exe` is blocked): `ade adp apk
+  appx appxbundle bat cab chm cmd com cpl diagcab diagcfg diagpack dll dmg ex ex_ exe hta
+  img ins iso isp jar jnlp js jse lib lnk mde mjs msc msi msix msixbundle msp mst nsh pif
+  ps1 scr sct shb sys vb vbe vbs vhd vxd wsc wsf wsh xll`. Gmail also refuses a `.zip`
+  that contains one of these.
+- **File names are cleaned** as blooms.ai cleans them: only the part after the last `/`
+  or `\`, without control characters or double quotes, trimmed. `getFilename()` shows
+  the name that will be sent.
+- **The content type** is guessed from the name (`pdf`, `png`, `jpg`, `csv`, `xlsx`,
+  `docx`, `ics`, `zip`, …; otherwise `application/octet-stream`), or pass it:
+  `Attachment.of("report", bytes, "application/pdf")`.
+- `Attachment.of` copies your bytes, so changing your array afterwards changes nothing.
+  `Attachment.fromPath` reads the file at once and refuses one over 5 MB without
+  reading it; its errors name the file, never the full path.
+- The files go on the **email itself**, never on the template's auto-reply.
+- A **test key** checks the files too (every rule above) and sends nothing: the status is
+  `TEST`.
+- Each attempt may take up to **2 minutes** (`attachmentTimeout`), since the upload and
+  the send happen while the call waits. Other calls keep `timeout`.
+- Batches take no attachments.
+
 ## Spring Boot
 
 ```properties
@@ -128,6 +193,7 @@ class OrderEmails {
 | `bloomsight.api-key` | (none: required for a client) |
 | `bloomsight.base-url` | `https://z.bloomscorp.com` |
 | `bloomsight.timeout` | `15s`, per attempt |
+| `bloomsight.attachment-timeout` | `2m`, per attempt of a send with attachments |
 | `bloomsight.max-retries` | `3` |
 | `bloomsight.max-retry-wait` | `60s`; a longer `Retry-After` is thrown, not waited out |
 
@@ -190,7 +256,8 @@ try {
 | `TEMPLATE_PUBLIC_ONLY` | The template's channel is "Browser forms"; set it to "API only" or "Both" |
 | `INVALID_VARIABLES` | A value name or size is not allowed (100 values, 5,000 characters each, 16 KB in all) |
 | `INVALID_DATA` | A value is not text, a number, true/false, null, or a map or list of those (checked before sending) |
-| `IDEMPOTENCY_CONFLICT` | The key was used with a different request |
+| `IDEMPOTENCY_CONFLICT` | The key was used with a different request (for attachments: a different file) |
+| `INVALID_ATTACHMENT`, `ATTACHMENT_TOO_LARGE`, `ATTACHMENTS_TOO_LARGE`, `TOO_MANY_ATTACHMENTS`, `ATTACHMENT_TYPE_BLOCKED` | See [Attachments](#attachments) (checked before sending) |
 | `INVALID_ROWS`, `BULK_NOT_IN_PLAN`, `MONTHLY_LIMIT` | Batches |
 | `RATE_LIMITED` | Too many requests; retried for you, thrown when retries run out |
 | `NETWORK_FAILURE`, `TIMEOUT`, `BAD_RESPONSE` | blooms.ai could not be reached or answered oddly, after retries |
@@ -203,15 +270,12 @@ Bloomsight.builder()
     .apiKey(apiKey)                              // required
     .baseUrl("https://z.bloomscorp.com")
     .timeout(Duration.ofSeconds(15))             // per attempt, end to end
+    .attachmentTimeout(Duration.ofMinutes(2))    // the same, for a send with attachments
     .maxRetries(3)
     .maxRetryWait(Duration.ofSeconds(60))        // a longer Retry-After is thrown, not waited out
     .httpClient(myHttpClient)                    // optional: proxies, custom TLS
     .build();
 ```
-
-## Not in 0.1.0
-
-Attachments.
 
 ## Development
 

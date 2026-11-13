@@ -36,6 +36,7 @@ public class BloomsightAutoConfiguration {
 			.apiKey(properties.getApiKey())
 			.baseUrl(properties.getBaseUrl())
 			.timeout(properties.getTimeout())
+			.attachmentTimeout(properties.getAttachmentTimeout())
 			.maxRetries(properties.getMaxRetries())
 			.maxRetryWait(properties.getMaxRetryWait())
 			.build();

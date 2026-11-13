@@ -14,6 +14,7 @@ public final class Send {
 	private final String priority;
 	private final Integer attempts;
 	private final Integer recipientCount;
+	private final Integer attachmentCount;
 	private final Instant nextAttemptAt;
 	private final String errorCode;
 	private final String error;
@@ -31,6 +32,7 @@ public final class Send {
 		this.priority = Fields.str(m, "priority");
 		this.attempts = Fields.integer(m, "attempts");
 		this.recipientCount = Fields.integer(m, "recipientCount");
+		this.attachmentCount = Fields.integer(m, "attachmentCount");
 		this.nextAttemptAt = Fields.instant(m, "nextAttemptAt");
 		this.errorCode = Fields.str(m, "errorCode");
 		this.error = Fields.str(m, "error");
@@ -59,6 +61,9 @@ public final class Send {
 	public Integer getAttempts() { return attempts; }
 
 	public Integer getRecipientCount() { return recipientCount; }
+
+	/** How many files a send with attachments carried; {@code null} for one without. */
+	public Integer getAttachmentCount() { return attachmentCount; }
 
 	/** When a waiting send will be tried next, e.g. when the mailbox's budget frees. */
 	public Instant getNextAttemptAt() { return nextAttemptAt; }

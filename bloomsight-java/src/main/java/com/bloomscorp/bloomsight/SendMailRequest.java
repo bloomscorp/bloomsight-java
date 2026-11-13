@@ -1,7 +1,10 @@
 package com.bloomscorp.bloomsight;
 
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -17,6 +20,9 @@ import java.util.Map;
  *     .idempotencyKey("order-A-1042-confirmation")
  *     .build();
  * }</pre>
+ *
+ * <p>With {@link Builder#attachment(Attachment) attachments} the email is sent at once,
+ * while the call waits, instead of being queued; see {@link Bloomsight#sendMail}.
  */
 public final class SendMailRequest {
 
@@ -24,12 +30,14 @@ public final class SendMailRequest {
 	private final String engineId;
 	private final Map<String, Object> data;
 	private final String idempotencyKey;
+	private final List<Attachment> attachments;
 
 	private SendMailRequest(Builder b) {
 		this.templateId = b.templateId;
 		this.engineId = b.engineId;
 		this.data = Collections.unmodifiableMap(new LinkedHashMap<>(b.data));
 		this.idempotencyKey = b.idempotencyKey;
+		this.attachments = Collections.unmodifiableList(new ArrayList<>(b.attachments));
 	}
 
 	public static Builder builder() {
@@ -44,6 +52,9 @@ public final class SendMailRequest {
 
 	public String getIdempotencyKey() { return idempotencyKey; }
 
+	/** The files to send, in order; empty when there are none. Unmodifiable. */
+	public List<Attachment> getAttachments() { return attachments; }
+
 	/** The JSON body: the idempotency key travels as a header, not in here. */
 	Map<String, Object> body() {
 		Map<String, Object> body = new LinkedHashMap<>();
@@ -53,11 +64,29 @@ public final class SendMailRequest {
 		return body;
 	}
 
+	/**
+	 * The multipart body of a send with attachments: the same fields, the values as JSON
+	 * text, then one {@code attachments} part per file. Checks every attachment rule
+	 * first, so nothing is uploaded that the server would refuse.
+	 */
+	Multipart.Body multipart() {
+		// Values first, as for a JSON send, so a bad value is INVALID_DATA either way.
+		String json = data.isEmpty() ? null : Json.write(data);
+		Attachments.check(attachments);
+		Multipart m = new Multipart();
+		if (templateId != null) m.field("templateId", templateId);
+		if (engineId != null) m.field("engineId", engineId);
+		if (json != null) m.field("data", json);
+		for (Attachment a : attachments) m.file("attachments", a.getFilename(), a.getContentType(), a.bytes());
+		return m.build();
+	}
+
 	public static final class Builder {
 		private String templateId;
 		private String engineId;
 		private final Map<String, Object> data = new LinkedHashMap<>();
 		private String idempotencyKey;
+		private final List<Attachment> attachments = new ArrayList<>();
 
 		private Builder() {
 		}
@@ -97,6 +126,35 @@ public final class SendMailRequest {
 		 */
 		public Builder idempotencyKey(String idempotencyKey) {
 			this.idempotencyKey = idempotencyKey;
+			return this;
+		}
+
+		/**
+		 * Adds a file. Up to 5, each up to 5 MB and 15 MB together; checked when the email
+		 * is sent, before anything is uploaded. The files go on the email itself, never on
+		 * an auto-reply.
+		 *
+		 * @throws BloomsightException {@code INVALID_ATTACHMENT} when it is {@code null}
+		 */
+		public Builder attachment(Attachment attachment) {
+			if (attachment == null) throw new BloomsightException("INVALID_ATTACHMENT", "an attachment must not be null");
+			this.attachments.add(attachment);
+			return this;
+		}
+
+		/**
+		 * Adds files, in the collection's order, to any already added. A {@code null}
+		 * collection adds nothing.
+		 *
+		 * @throws BloomsightException {@code INVALID_ATTACHMENT} when one of them is {@code null}
+		 */
+		public Builder attachments(Collection<Attachment> attachments) {
+			if (attachments == null) return this;
+			List<Attachment> all = new ArrayList<>(attachments);
+			for (Attachment a : all) {
+				if (a == null) throw new BloomsightException("INVALID_ATTACHMENT", "an attachment must not be null");
+			}
+			this.attachments.addAll(all);
 			return this;
 		}
 

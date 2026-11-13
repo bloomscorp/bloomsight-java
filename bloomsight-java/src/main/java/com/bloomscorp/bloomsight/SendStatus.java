@@ -3,6 +3,10 @@ package com.bloomscorp.bloomsight;
 /**
  * Where one email is: {@code QUEUED → SENDING → SENT | FAILED | UNKNOWN}.
  *
+ * <p>A send with attachments is never queued: {@link Bloomsight#sendMail} returns it
+ * finished ({@code SENT}, {@code FAILED} or {@code UNKNOWN}), or {@code SENDING} when the
+ * same Idempotency-Key is still being sent by an earlier call.
+ *
  * <p>{@code UNKNOWN} means the connection to the mail provider dropped mid-send, so it
  * cannot be known whether it arrived. It is never retried automatically, because a
  * duplicate order confirmation is worse than a missing one.

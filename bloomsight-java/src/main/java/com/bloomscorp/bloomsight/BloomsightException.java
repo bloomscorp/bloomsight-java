@@ -21,6 +21,11 @@ import java.util.Map;
  *   <li>{@code INTERRUPTED}: the calling thread was interrupted while waiting</li>
  * </ul>
  *
+ * <p>The attachment rules are checked before anything is uploaded, with the server's
+ * own codes: {@code INVALID_ATTACHMENT}, {@code ATTACHMENT_TOO_LARGE},
+ * {@code ATTACHMENTS_TOO_LARGE}, {@code TOO_MANY_ATTACHMENTS},
+ * {@code ATTACHMENT_TYPE_BLOCKED}.
+ *
  * <p>The API key never appears in a message.
  */
 public class BloomsightException extends RuntimeException {

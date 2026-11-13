@@ -43,7 +43,11 @@ class BloomsightTest {
 
 	@AfterEach
 	void stop() {
-		fake.close();
+		try {
+			assertTrue(fake.malformed.isEmpty(), () -> "the fake got a malformed body: " + fake.malformed);
+		} finally {
+			fake.close();
+		}
 	}
 
 	Bloomsight client() {

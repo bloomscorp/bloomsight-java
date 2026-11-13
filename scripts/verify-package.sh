@@ -57,6 +57,7 @@ JAVAC="${JHOME:+$JHOME/bin/}javac"
 JAVA="${JHOME:+$JHOME/bin/}java"
 work="$(mktemp -d)"
 cat > "$work/Consumer.java" <<'EOF'
+import com.bloomscorp.bloomsight.Attachment;
 import com.bloomscorp.bloomsight.Bloomsight;
 import com.bloomscorp.bloomsight.BloomsightException;
 import com.bloomscorp.bloomsight.SendMailRequest;
@@ -70,8 +71,13 @@ public class Consumer {
 			if (!"INVALID_API_KEY".equals(e.getCode())) throw new AssertionError(e.getCode());
 		}
 		Bloomsight b = Bloomsight.builder().apiKey("blm_test_" + "0".repeat(64)).build();
-		SendMailRequest r = SendMailRequest.builder().templateId("t").engineId("e").value("name", "Asha").build();
+		SendMailRequest r = SendMailRequest.builder().templateId("t").engineId("e").value("name", "Asha")
+			.attachment(Attachment.of("../invoice.pdf", new byte[] {1, 2, 3})).build();
 		if (!b.isTestKey() || r.getData().isEmpty()) throw new AssertionError("client did not build");
+		Attachment a = r.getAttachments().get(0);
+		if (!"invoice.pdf".equals(a.getFilename()) || !"application/pdf".equals(a.getContentType()) || a.getSize() != 3) {
+			throw new AssertionError("attachment did not build: " + a);
+		}
 		System.out.println(Bloomsight.VERSION);
 	}
 }

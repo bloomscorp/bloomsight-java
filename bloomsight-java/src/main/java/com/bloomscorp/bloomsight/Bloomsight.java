@@ -72,6 +72,7 @@ public final class Bloomsight {
 	private final String apiKey;
 	private final String base;
 	private final Duration timeout;
+	private final Duration attachmentTimeout;
 	private final int maxRetries;
 	private final Duration maxRetryWait;
 	private final HttpClient http;
@@ -89,6 +90,7 @@ public final class Bloomsight {
 		String baseUrl = b.baseUrl == null || b.baseUrl.trim().isEmpty() ? DEFAULT_BASE_URL : b.baseUrl.trim();
 		this.base = baseUrl.replaceAll("/+$", "");
 		this.timeout = positive(b.timeout, Duration.ofSeconds(15), "timeout");
+		this.attachmentTimeout = positive(b.attachmentTimeout, Duration.ofMinutes(2), "attachmentTimeout");
 		if (b.maxRetries < 0) throw new IllegalArgumentException("maxRetries must be 0 or more");
 		this.maxRetries = b.maxRetries;
 		this.maxRetryWait = b.maxRetryWait == null ? Duration.ofSeconds(60) : b.maxRetryWait;
@@ -120,10 +122,24 @@ public final class Bloomsight {
 	/**
 	 * Queues one email. It goes out within about a second while the mailbox has budget;
 	 * follow it with {@link #getSend(String)}.
+	 *
+	 * <p>With attachments it is not queued: it is sent while this call waits (up to the
+	 * {@link Builder#attachmentTimeout(Duration) attachment timeout} per attempt) and
+	 * comes back finished: {@link SendStatus#SENT}, {@link SendStatus#FAILED} (the provider
+	 * refused it) or {@link SendStatus#UNKNOWN} (the connection dropped mid-send). These
+	 * are returned, not thrown. The attachment rules are checked before anything is
+	 * uploaded.
 	 */
 	public Send sendMail(SendMailRequest request) {
 		String key = request.getIdempotencyKey() != null ? request.getIdempotencyKey() : UUID.randomUUID().toString();
-		Result r = request("POST", "/send", request.body(), key, null);
+		Result r;
+		if (request.getAttachments().isEmpty()) {
+			r = request("POST", "/send", request.body(), key, null);
+		} else {
+			Multipart.Body body = request.multipart();
+			r = exchange("POST", "/send", null, body.contentType,
+				HttpRequest.BodyPublishers.ofByteArray(body.bytes), key, attachmentTimeout);
+		}
 		return new Send(Fields.map(r.data), replayed(r.headers));
 	}
 
@@ -225,18 +241,27 @@ public final class Bloomsight {
 	                       Map<String, String> query) {
 		// Serialise first, so a bad template value fails before anything is sent.
 		String json = body == null ? null : Json.write(body);
+		return exchange(method, path, query, json == null ? null : "application/json", json == null
+			? HttpRequest.BodyPublishers.noBody()
+			: HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8), idempotencyKey, timeout);
+	}
+
+	/**
+	 * Sends a request, retrying as needed. The body publisher replays the same bytes on
+	 * every attempt; {@code attemptTimeout} caps each attempt end to end.
+	 */
+	private Result exchange(String method, String path, Map<String, String> query, String contentType,
+	                        HttpRequest.BodyPublisher bodyPublisher, String idempotencyKey, Duration attemptTimeout) {
 		URI uri = URI.create(base + "/api/v1/bloomsight/email" + path + queryString(query));
 
 		HttpRequest.Builder rb = HttpRequest.newBuilder(uri)
-			.timeout(timeout)
+			.timeout(attemptTimeout)
 			.header("Authorization", "Bearer " + apiKey)
 			.header("Accept", "application/json")
 			.header("User-Agent", "bloomsight-java/" + VERSION);
-		if (json != null) rb.header("Content-Type", "application/json");
+		if (contentType != null) rb.header("Content-Type", contentType);
 		if (idempotencyKey != null) rb.header("Idempotency-Key", idempotencyKey);
-		rb.method(method, json == null
-			? HttpRequest.BodyPublishers.noBody()
-			: HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8));
+		rb.method(method, bodyPublisher);
 		HttpRequest httpRequest = rb.build();
 
 		// GETs are safe to repeat; every send and batch has an idempotency key; the batch
@@ -245,14 +270,14 @@ public final class Bloomsight {
 		for (;;) {
 			HttpResponse<String> response;
 			try {
-				response = send(httpRequest);
+				response = send(httpRequest, attemptTimeout);
 			} catch (TimeoutException | HttpTimeoutException e) {
 				if (attempt < maxRetries) {
 					pause(backoff(attempt++), idempotencyKey);
 					continue;
 				}
 				throw new BloomsightException("TIMEOUT",
-					redact("blooms.ai did not answer within " + timeout.toMillis() + " ms"),
+					redact("blooms.ai did not answer within " + attemptTimeout.toMillis() + " ms"),
 					null, null, idempotencyKey, null, null);
 			} catch (IOException e) {
 				if (attempt < maxRetries) {
@@ -304,11 +329,11 @@ public final class Bloomsight {
 	}
 
 	/** One attempt, capped at the timeout end to end (headers and body). */
-	private HttpResponse<String> send(HttpRequest request) throws IOException, TimeoutException {
+	private HttpResponse<String> send(HttpRequest request, Duration attemptTimeout) throws IOException, TimeoutException {
 		CompletableFuture<HttpResponse<String>> future =
 			http.sendAsync(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
 		try {
-			return future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+			return future.get(attemptTimeout.toMillis(), TimeUnit.MILLISECONDS);
 		} catch (TimeoutException e) {
 			future.cancel(true);
 			throw e;
@@ -410,6 +435,7 @@ public final class Bloomsight {
 		private String apiKey;
 		private String baseUrl;
 		private Duration timeout;
+		private Duration attachmentTimeout;
 		private int maxRetries = 3;
 		private Duration maxRetryWait;
 		private HttpClient httpClient;
@@ -432,9 +458,19 @@ public final class Bloomsight {
 			return this;
 		}
 
-		/** Per attempt, end to end. Default 15 seconds. */
+		/** Per attempt, end to end. Default 15 seconds. Sends with attachments use {@link #attachmentTimeout(Duration)}. */
 		public Builder timeout(Duration timeout) {
 			this.timeout = timeout;
+			return this;
+		}
+
+		/**
+		 * Per attempt, end to end, for a send with attachments: it is sent while the call
+		 * waits, and the upload takes time. Default 2 minutes. Other calls use
+		 * {@link #timeout(Duration)}.
+		 */
+		public Builder attachmentTimeout(Duration attachmentTimeout) {
+			this.attachmentTimeout = attachmentTimeout;
 			return this;
 		}
 

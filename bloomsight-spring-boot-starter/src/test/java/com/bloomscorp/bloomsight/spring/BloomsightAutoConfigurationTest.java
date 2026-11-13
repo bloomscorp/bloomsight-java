@@ -1,5 +1,6 @@
 package com.bloomscorp.bloomsight.spring;
 
+import com.bloomscorp.bloomsight.Attachment;
 import com.bloomscorp.bloomsight.Bloomsight;
 import com.bloomscorp.bloomsight.BloomsightException;
 import com.bloomscorp.bloomsight.SendMailRequest;
@@ -72,10 +73,12 @@ class BloomsightAutoConfigurationTest {
 			"bloomsight.base-url=https://example.test",
 			"bloomsight.timeout=5s",
 			"bloomsight.max-retries=1",
-			"bloomsight.max-retry-wait=2m"
+			"bloomsight.max-retry-wait=2m",
+			"bloomsight.attachment-timeout=5m"
 		).run(ctx -> {
 			BloomsightProperties p = ctx.getBean(BloomsightProperties.class);
 			assertThat(p.getTimeout()).isEqualTo(Duration.ofSeconds(5));
+			assertThat(p.getAttachmentTimeout()).isEqualTo(Duration.ofMinutes(5));
 			assertThat(p.getMaxRetries()).isEqualTo(1);
 			assertThat(p.getMaxRetryWait()).isEqualTo(Duration.ofMinutes(2));
 			assertThat(p.toString()).doesNotContain(KEY);
@@ -108,6 +111,55 @@ class BloomsightAutoConfigurationTest {
 				Throwable thrown = null;
 				try {
 					ctx.getBean(Bloomsight.class).sendMail(SendMailRequest.builder().templateId("t").engineId("e").build());
+				} catch (BloomsightException e) {
+					thrown = e;
+				}
+				long ms = (System.nanoTime() - start) / 1_000_000;
+				assertThat(thrown).isInstanceOf(BloomsightException.class);
+				assertThat(((BloomsightException) thrown).getCode()).isEqualTo("TIMEOUT");
+				assertThat(ms).isBetween(250L, 3000L);
+				assertThat(hits.get()).isEqualTo(1);
+			});
+		} finally {
+			release.countDown();
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void theAttachmentTimeoutDefaultsToTwoMinutes() {
+		assertThat(new BloomsightProperties().getAttachmentTimeout()).isEqualTo(Duration.ofMinutes(2));
+	}
+
+	@Test
+	void theClientUsesTheBoundAttachmentTimeoutForSendsWithFiles() throws Exception {
+		// A local server that never answers. The plain timeout is long, the attachment
+		// timeout short: a send with a file must give up after the attachment timeout, so
+		// it fails here if the property is not passed to the client (or the plain timeout
+		// is passed in its place). Nothing leaves the machine.
+		AtomicInteger hits = new AtomicInteger();
+		CountDownLatch release = new CountDownLatch(1);
+		HttpServer server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+		server.setExecutor(Executors.newCachedThreadPool());
+		server.createContext("/", ex -> {
+			hits.incrementAndGet();
+			try { release.await(10, TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+			ex.close();
+		});
+		server.start();
+		try {
+			runner.withPropertyValues(
+				"bloomsight.api-key=" + KEY,
+				"bloomsight.base-url=http://127.0.0.1:" + server.getAddress().getPort(),
+				"bloomsight.timeout=20s",
+				"bloomsight.attachment-timeout=300ms",
+				"bloomsight.max-retries=0"
+			).run(ctx -> {
+				long start = System.nanoTime();
+				Throwable thrown = null;
+				try {
+					ctx.getBean(Bloomsight.class).sendMail(SendMailRequest.builder().templateId("t").engineId("e")
+						.attachment(Attachment.of("a.pdf", new byte[]{1})).build());
 				} catch (BloomsightException e) {
 					thrown = e;
 				}

@@ -23,6 +23,12 @@ public class BloomsightProperties {
 	/** How long one attempt may take, end to end. */
 	private Duration timeout = Duration.ofSeconds(15);
 
+	/**
+	 * How long one attempt of a send with attachments may take, end to end: it is sent
+	 * while the call waits, and the files are uploaded.
+	 */
+	private Duration attachmentTimeout = Duration.ofMinutes(2);
+
 	/** Retries after the first attempt, for network errors, timeouts, 429 and 5xx. */
 	private int maxRetries = 3;
 
@@ -51,6 +57,14 @@ public class BloomsightProperties {
 
 	public void setTimeout(Duration timeout) {
 		this.timeout = timeout;
+	}
+
+	public Duration getAttachmentTimeout() {
+		return attachmentTimeout;
+	}
+
+	public void setAttachmentTimeout(Duration attachmentTimeout) {
+		this.attachmentTimeout = attachmentTimeout;
 	}
 
 	public int getMaxRetries() {
